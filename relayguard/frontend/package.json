@@ -1,0 +1,8 @@
+{
+  "name": "relayguard-dashboard",
+  "private": true,
+  "version": "0.3.0",
+  "scripts": {"build": "vite build"},
+  "dependencies": {"@vitejs/plugin-react": "latest", "vite": "latest", "react": "latest", "react-dom": "latest"},
+  "devDependencies": {}
+}

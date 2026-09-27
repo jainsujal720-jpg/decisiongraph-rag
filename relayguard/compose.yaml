@@ -1,0 +1,59 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8100:8100"
+    environment:
+      RELAYGUARD_REQUEST_MAX_INPUT_CHARS: "12000"
+      RELAYGUARD_DATABASE_URL: "postgresql://relayguard:relayguard@postgres:5432/relayguard"
+      RELAYGUARD_REDIS_URL: "redis://redis:6379/0"
+      RELAYGUARD_PROVIDER_MODE: "mock"
+      RELAYGUARD_AUDIT_BACKEND: "postgres"
+      RELAYGUARD_RATE_LIMIT_BACKEND: "redis"
+      RELAYGUARD_CIRCUIT_BREAKER_BACKEND: "redis"
+      RELAYGUARD_AUTH_MODE: "api_key"
+      RELAYGUARD_TENANT_API_KEYS: '{"demo-acme-viewer-key":{"tenant_id":"acme","role":"viewer"},"demo-acme-operator-key":{"tenant_id":"acme","role":"operator"},"demo-globex-operator-key":{"tenant_id":"globex","role":"operator"}}'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  dashboard:
+    build: ./frontend
+    ports:
+      - "3100:80"
+    depends_on:
+      api:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: relayguard
+      POSTGRES_USER: relayguard
+      POSTGRES_PASSWORD: relayguard
+    ports:
+      - "5440:5432"
+    volumes:
+      - relayguard_postgres:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayguard -d relayguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  relayguard_postgres:

@@ -1,0 +1,235 @@
+name: decisiongraph
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: decisiongraph
+      POSTGRES_USER: decisiongraph
+      POSTGRES_PASSWORD: decisiongraph
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U decisiongraph -d decisiongraph"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/decisiongraph-local
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: development
+      POSTGRES_URL: postgresql://decisiongraph:decisiongraph@postgres:5432/decisiongraph
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: decisiongraph-local
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RELAYGUARD_URL: http://relayguard-api:8100
+      RELAYGUARD_API_KEY: ${RELAYGUARD_API_KEY:-}
+      RELAYGUARD_TIMEOUT_SECONDS: ${RELAYGUARD_TIMEOUT_SECONDS:-120}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-128}
+      RETRIEVAL_CANDIDATE_LIMIT: ${RETRIEVAL_CANDIDATE_LIMIT:-20}
+      RETRIEVAL_DEFAULT_LIMIT: ${RETRIEVAL_DEFAULT_LIMIT:-8}
+      RRF_CONSTANT: ${RRF_CONSTANT:-60}
+      EXTRACTION_MODEL: ${EXTRACTION_MODEL:-gpt-4.1-mini}
+      GENERATION_MODEL: ${GENERATION_MODEL:-gpt-4.1-mini}
+      VERIFICATION_MODEL: ${VERIFICATION_MODEL:-gpt-4.1-mini}
+      GRAPH_MAX_CHUNKS_PER_REQUEST: ${GRAPH_MAX_CHUNKS_PER_REQUEST:-50}
+      ORCHESTRATION_CANDIDATE_LIMIT: ${ORCHESTRATION_CANDIDATE_LIMIT:-12}
+      CONTEXT_MAX_TOKENS: ${CONTEXT_MAX_TOKENS:-3000}
+      ANSWER_MAX_CLAIMS: ${ANSWER_MAX_CLAIMS:-6}
+      CAUSAL_DRAFT_OPTIMIZATION: ${CAUSAL_DRAFT_OPTIMIZATION:-false}
+      MIN_GROUNDEDNESS: ${MIN_GROUNDEDNESS:-0.75}
+      REVIEW_CONFIDENCE_THRESHOLD: ${REVIEW_CONFIDENCE_THRESHOLD:-0.80}
+      API_ACCESS_KEY: ${API_ACCESS_KEY:-}
+      RATE_LIMIT_REQUESTS_PER_MINUTE: ${RATE_LIMIT_REQUESTS_PER_MINUTE:-0}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      AUTH_MODE: ${AUTH_MODE:-development}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ISSUER: ${JWT_ISSUER:-decisiongraph-local}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-decisiongraph-api}
+      AUDIT_REQUIRED: ${AUDIT_REQUIRED:-false}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      CLOUD_S3_BUCKET: ${CLOUD_S3_BUCKET:-}
+      CLOUD_S3_REGION: ${CLOUD_S3_REGION:-ap-south-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      graph-init:
+        condition: service_completed_successfully
+      relayguard-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  relayguard-api:
+    build: ./relayguard
+    environment:
+      RELAYGUARD_DATABASE_URL: postgresql://relayguard:relayguard@relayguard-postgres:5432/relayguard
+      RELAYGUARD_REDIS_URL: redis://relayguard-redis:6379/0
+      RELAYGUARD_PROVIDER_MODE: ${RELAYGUARD_PROVIDER_MODE:-mock}
+      RELAYGUARD_PROVIDER_TIMEOUT_SECONDS: ${RELAYGUARD_PROVIDER_TIMEOUT_SECONDS:-60}
+      RELAYGUARD_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RELAYGUARD_JEV_MODE: ${RELAYGUARD_JEV_MODE:-off}
+      RELAYGUARD_TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      RELAYGUARD_JEV_MODEL: ${RELAYGUARD_JEV_MODEL:-jev-1.13.0}
+      RELAYGUARD_JEV_MIN_CONFIDENCE: ${RELAYGUARD_JEV_MIN_CONFIDENCE:-0.80}
+      RELAYGUARD_AUDIT_BACKEND: postgres
+      RELAYGUARD_RATE_LIMIT_BACKEND: redis
+      RELAYGUARD_CIRCUIT_BREAKER_BACKEND: redis
+      RELAYGUARD_AUTH_MODE: ${RELAYGUARD_AUTH_MODE:-off}
+      RELAYGUARD_TENANT_API_KEYS: '${RELAYGUARD_TENANT_API_KEYS:-{}}'
+    ports:
+      - "8100:8100"
+    depends_on:
+      relayguard-postgres:
+        condition: service_healthy
+      relayguard-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  relayguard-dashboard:
+    build: ./relayguard/frontend
+    ports:
+      - "3100:80"
+    depends_on:
+      relayguard-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relayguard-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: relayguard
+      POSTGRES_USER: relayguard
+      POSTGRES_PASSWORD: relayguard
+    ports:
+      - "5440:5432"
+    volumes:
+      - relayguard_postgres_data:/var/lib/postgresql/data
+      - ./relayguard/database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayguard -d relayguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  relayguard-redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  graph-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "decisiongraph.infrastructure.graph_bootstrap"]
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: decisiongraph-local
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    restart: "no"
+
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "decisiongraph.infrastructure.database_bootstrap"]
+    environment:
+      POSTGRES_URL: postgresql://decisiongraph:decisiongraph@postgres:5432/decisiongraph
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  neo4j_logs:
+  redis_data:
+  relayguard_postgres_data:

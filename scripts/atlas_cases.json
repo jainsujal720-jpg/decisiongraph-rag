@@ -1,0 +1,6 @@
+[
+  {"question": "Who owns the payment-reliability workstream?", "expected_decision": "answered", "expected_terms": ["Priya Shah"], "expected_source": "atlas_status.md"},
+  {"question": "Why was the Atlas launch delayed?", "expected_decision": "answered", "expected_terms": ["payment", "98%"], "expected_source": "atlas_status.md"},
+  {"question": "When is payment certification escalated?", "expected_decision": "answered", "expected_terms": ["9 September"], "expected_source": "atlas_status.md"},
+  {"question": "What is the name of Atlas's VP of sales?", "expected_decision": "abstained", "expected_terms": []}
+]
